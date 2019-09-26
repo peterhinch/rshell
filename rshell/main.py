@@ -151,7 +151,6 @@ QUIET = False
 RTS = ''
 DTR = ''
 
-
 IGFILE_NAME = '.rshell-ignore'
 MACFILE_NAME = 'rshell_macros'
 
@@ -883,6 +882,21 @@ def rsync(src_dir, dst_dir, mirror, dry_run, print_func, recursed, sync_hidden):
     for name, stat in src_files:
         d_src[name] = stat
 
+    # Check source for an ignore file
+    all_src = auto(listdir_stat, src_dir, show_hidden=True)
+    igfiles = [x for x in all_src if x[0] == IGFILE_NAME]
+    set_ignore = set()
+    if len(igfiles):
+        igfile, mode = igfiles[0]
+        if mode_isfile(stat_mode(mode)):
+            with open(src_dir + '/' + igfile, 'r') as f:
+                for line in f.readlines():
+                    line = line.strip()
+                    if line:
+                        set_ignore.add(line)
+        else:
+            print_err('Ignore file "{:s}" is not a file'.format(IGFILE_NAME))
+
     d_dst = {}
     dst_files = auto(listdir_stat, dst_dir, show_hidden=sync_hidden)
     if dst_files is None: # Directory does not exist
@@ -893,7 +907,7 @@ def rsync(src_dir, dst_dir, mirror, dry_run, print_func, recursed, sync_hidden):
             d_dst[name] = stat
 
     set_dst = set(d_dst.keys())
-    set_src = set(d_src.keys())
+    set_src = set(d_src.keys()) - set_ignore
     to_add = set_src - set_dst  # Files to copy to dest
     to_del = set_dst - set_src  # To delete from dest
     to_upd = set_dst.intersection(set_src) # In both: may need updating
@@ -2727,6 +2741,9 @@ class Shell(cmd.Cmd):
         ),
     )
 
+    def complete_rsync(self, text, line, begidx, endidx):
+        return self.filename_complete(text, line, begidx, endidx)
+
     def do_rsync(self, line):
         """rsync [-m|--mirror] [-n|--dry-run] [-q|--quiet] SRC_DIR DEST_DIR
 
@@ -2755,7 +2772,6 @@ def load_macros(mod_name=None):
         return False
     except:
         print("Macro module {} is invalid".format(mod_name))
-        raise
         return False
 
     if hasattr(mmod, 'macros') and isinstance(mmod.macros, dict):
