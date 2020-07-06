@@ -687,6 +687,14 @@ def cp(src_filename, dst_filename):
     return False
 
 
+def date():
+    import time
+    tm = time.localtime()
+    dow = ('Mon', 'Tue', 'Web', 'Thu', 'Fri', 'Sat', 'Sun')
+    mon = ('???', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
+    return repr('{} {} {:2d} {:02d}:{:02d}:{:02d} {}'.format(dow[tm[6]], mon[tm[1]], tm[2], tm[3], tm[4], tm[5], tm[0]))
+
+
 def eval_str(string):
     """Executes a string containing python code."""
     output = eval(string)
@@ -954,6 +962,7 @@ def rsync(src_dir, dst_dir, mirror, dry_run, print_func, recursed, sync_hidden):
                       "'{}' is a directory. Ignoring"
                 print_err(msg.format(src_filename, dst_filename))
             else:
+                print_func('Checking {}'.format(dst_filename))
                 if stat_mtime(src_stat) > stat_mtime(dst_stat):
                     msg = "{} is newer than {} - copying"
                     print_func(msg.format(src_filename, dst_filename))
@@ -964,22 +973,38 @@ def rsync(src_dir, dst_dir, mirror, dry_run, print_func, recursed, sync_hidden):
 def set_time(rtc_time):
     rtc = None
     try:
-        # Pyboard (pyboard doesn't have machine.RTC())
+        # Pyboard (pyboard doesn't have machine.RTC()).
+        # The pyb.RTC.datetime function takes the arguments in the order:
+        # (year, month, day, weekday, hour, minute, second, subseconds)
+        # http://docs.micropython.org/en/latest/library/pyb.RTC.html#pyb.RTC.datetime
         import pyb
         rtc = pyb.RTC()
         rtc.datetime(rtc_time)
     except:
         try:
+            import pycom
+            # PyCom's machine.RTC takes its arguments in a slightly different order
+            # than the official machine.RTC.
+            # (year, month, day, hour, minute, second[, microsecond[, tzinfo]])
+            # https://docs.pycom.io/firmwareapi/pycom/machine/rtc/#rtc-init-datetime-none-source-rtc-internal-rc
+            rtc_time2 = (rtc_time[0], rtc_time[1], rtc_time[2], rtc_time[4], rtc_time[5], rtc_time[6])
             import machine
             rtc = machine.RTC()
-            try:
-                # ESP8266 uses rtc.datetime() rather than rtc.init()
-                rtc.datetime(rtc_time)
-            except:
-                # ESP32 (at least Loboris port) uses rtc.init()
-                rtc.init(rtc_time)
+            rtc.init(rtc_time2)
         except:
-            pass
+            try:
+                # The machine.RTC documentation was incorrect and doesn't agree with the code, so no link
+                # is presented here. The order of the arguments is the same as the pyboard.
+                import machine
+                rtc = machine.RTC()
+                try:
+                    # ESP8266 uses rtc.datetime() rather than rtc.init()
+                    rtc.datetime(rtc_time)
+                except:
+                    # ESP32 (at least Loboris port) uses rtc.init()
+                    rtc.init(rtc_time)
+            except:
+                pass
 
 
 # 0x0D's sent from the host get transformed into 0x0A's, and 0x0A sent to the
@@ -1048,12 +1073,12 @@ def send_file_to_remote(dev, src_file, dst_filename, filesize, dst_mode='wb'):
     """
     bytes_remaining = filesize
     save_timeout = dev.timeout
-    dev.timeout = 1
+    dev.timeout = 2
     while bytes_remaining > 0:
         # Wait for ack so we don't get too far ahead of the remote
         ack = dev.read(1)
         if ack is None or ack != b'\x06':
-            sys.stderr.write("timed out or error in transfer to remote\n")
+            sys.stderr.write("timed out or error in transfer to remote: {!r}\n".format(ack))
             sys.exit(2)
 
         if HAS_BUFFER:
@@ -2281,6 +2306,34 @@ class Shell(cmd.Cmd):
                 err = "Unable to copy '{}' to '{}'"
                 print_err(err.format(src_filename, dst_filename))
                 break
+
+    argparse_date = (
+        add_arg(
+            '-b', '--board',
+            dest='board',
+            action='store',
+            help='Specify which board to get the date for',
+            default=None
+        ),
+    )
+
+    def do_date(self, line):
+        """date [-b boardname]
+
+           Displays the current date and time for the board indicated by the -b option,
+           or, if no board is specified, then it will use the current directory to
+           determine the board.
+        """
+        args = self.line_to_args(line)
+        if args.board is None:
+            dev, _ = get_dev_and_path(cur_dir)
+        else:
+            dev = find_device_by_name(args.board)
+        if dev is None:
+            self.print('Host:', eval(date()))
+        else:
+            self.print('{}: {}'.format(dev.name, trim(dev.remote_eval(date))))
+
 
     def do_echo(self, line):
         """echo TEXT...
